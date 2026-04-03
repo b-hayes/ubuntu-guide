@@ -127,6 +127,5 @@ echo "2. On Windows, you should now see this computer in Network (File Explorer 
 echo "3. The shared folder is located at: $SHARE_DIR"
 echo ""
 echo "Troubleshooting:"
-echo "- If you don't see the computer in Windows Network, try restarting the Windows computer"
 echo "- Check service status with: sudo systemctl status smbd nmbd wsdd"
 echo "- View Samba logs with: sudo tail -f /var/log/samba/log.*"
