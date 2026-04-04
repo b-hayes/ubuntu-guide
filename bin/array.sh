@@ -83,8 +83,8 @@ cmd_add() {
     sudo systemctl daemon-reload
     echo -e "${YELLOW}Running:${NC} sudo mount $mount_point"
     sudo mount "$mount_point"
-    echo -e "${YELLOW}Running:${NC} sudo attr -s mergerfs.srcmounts -V '+$mount_point' $ARRAY_MOUNT"
-    sudo attr -s mergerfs.srcmounts -V "+${mount_point}" "$ARRAY_MOUNT"
+    echo -e "${YELLOW}Running:${NC} sudo setfattr -n user.mergerfs.branches -v '+>$mount_point' $ARRAY_MOUNT/.mergerfs"
+    sudo setfattr -n user.mergerfs.branches -v "+>${mount_point}" "$ARRAY_MOUNT/.mergerfs"
 
     # 8. Verify
     echo ""
@@ -168,8 +168,8 @@ cmd_remove() {
     [[ "$confirm" != "YES" ]] && { echo "Aborted."; exit 0; }
 
     # Remove from live pool
-    echo -e "${YELLOW}Running:${NC} sudo attr -s mergerfs.srcmounts -V '-$mount_point' $ARRAY_MOUNT"
-    sudo attr -s mergerfs.srcmounts -V "-${mount_point}" "$ARRAY_MOUNT"
+    echo -e "${YELLOW}Running:${NC} sudo setfattr -n user.mergerfs.branches -v '-$mount_point' $ARRAY_MOUNT/.mergerfs"
+    sudo setfattr -n user.mergerfs.branches -v "-${mount_point}" "$ARRAY_MOUNT/.mergerfs"
 
     # Unmount
     echo -e "${YELLOW}Running:${NC} sudo umount $mount_point"

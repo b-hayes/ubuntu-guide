@@ -121,7 +121,7 @@ This creates the directory already owned by your user. If you use `sudo mkdir` i
 ```bash
 sudo systemctl daemon-reload
 sudo mount /mnt/drive02
-sudo attr -s mergerfs.srcmounts -V '+/mnt/drive02' /array
+sudo setfattr -n user.mergerfs.branches -v '+>/mnt/drive02' /array/.mergerfs
 ```
 
 The `attr` command adds the drive to the running MergerFS pool instantly without unmounting `/array` (which will fail if anything has the mount open).
@@ -204,7 +204,7 @@ sudo umount /array && sudo mount /array
 MergerFS supports adding paths on the fly via xattr:
 
 ```bash
-sudo attr -s mergerfs.srcmounts -V '+/mnt/drive02' /array
+sudo setfattr -n user.mergerfs.branches -v '+>/mnt/drive02' /array/.mergerfs
 ```
 
 This is temporary — update `/etc/fstab` to make it permanent.
