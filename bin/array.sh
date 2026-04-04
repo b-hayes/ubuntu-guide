@@ -16,24 +16,21 @@ _error_handler() {
 }
 trap '_error_handler $LINENO "$BASH_COMMAND"' ERR
 
-# ── add command ───────────────────────────────────────────────────────────────
-
-cmd_add() {
-    local device="${1:?Usage: array add <device> <label> <mountpoint>}"
-    local label="${2:?Usage: array add <device> <label> <mountpoint>}"
-    local mount_point="${3:?Usage: array add <device> <label> <mountpoint>}"
+# ── shared per-drive logic ────────────────────────────────────────────────────
+# Usage: _prepare_drive <device> <label> <mount_point> <owner>
+# Formats (if needed), creates mount point, adds individual fstab entry.
+# Sets global _PREPARED_UUID to the drive's UUID after completion.
+_PREPARED_UUID=""
+_prepare_drive() {
+    local device="$1" label="$2" mount_point="$3" drive_owner="$4"
 
     echo -e "${BOLD}Device:${NC}      $device"
     echo -e "${BOLD}Label:${NC}       $label"
     echo -e "${BOLD}Mount point:${NC} $mount_point"
+    echo -e "${BOLD}Owner:${NC}       $drive_owner"
     echo ""
 
-    # 1. Detect existing drives and partitions
-    echo -e "${YELLOW}Detected drives:${NC}"
-    lsblk -e 7 -o NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINT
-    echo ""
-
-    # 2. Partition and format
+    # Format or relabel
     if lsblk -o FSTYPE --noheadings -n "$device" 2>/dev/null | grep -q '\S'; then
         echo -e "${GREEN}Already formatted — skipping mkfs.${NC}"
         echo -e "${YELLOW}Running:${NC} sudo xfs_admin -L \"$label\" $device"
@@ -51,34 +48,49 @@ cmd_add() {
     fi
     echo -e "${GREEN}Formatted.${NC}"
 
-    # 3. Get UUID
-    local uuid
-    uuid=$(sudo blkid -s UUID -o value "$device")
-    echo -e "UUID: ${BOLD}$uuid${NC}"
+    # Get UUID
+    _PREPARED_UUID=$(sudo blkid -s UUID -o value "$device")
+    echo -e "UUID: ${BOLD}$_PREPARED_UUID${NC}"
 
-    # 4. Create mount point
-    local default_owner="${SUDO_USER:-$(whoami)}"
-    read -r -p "Drive owner [$default_owner]: " drive_owner
-    drive_owner="${drive_owner:-$default_owner}"
+    # Create mount point
     echo -e "${YELLOW}Running:${NC} sudo install -d -o $drive_owner -g $drive_owner $mount_point"
     sudo install -d -o "$drive_owner" -g "$drive_owner" "$mount_point"
 
-    # 5 & 6. Update fstab
-    local drive_line="/dev/disk/by-uuid/$uuid  $mount_point  auto  nosuid,nodev,nofail,x-gvfs-show  0  0"
-    local mergerfs_line old_sources new_mergerfs_line
+    # Add individual drive fstab entry
+    local drive_line="/dev/disk/by-uuid/$_PREPARED_UUID  $mount_point  auto  nosuid,nodev,nofail,x-gvfs-show  0  0"
+    echo -e "${YELLOW}Adding to fstab:${NC} $drive_line"
+    echo "$drive_line" | sudo tee -a "$FSTAB"
+}
+
+# ── add command ───────────────────────────────────────────────────────────────
+
+cmd_add() {
+    local device="${1:?Usage: array add <device> <label> <mountpoint>}"
+    local label="${2:?Usage: array add <device> <label> <mountpoint>}"
+    local mount_point="${3:?Usage: array add <device> <label> <mountpoint>}"
+
+    echo -e "${YELLOW}Detected drives:${NC}"
+    lsblk -e 7 -o NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINT
+    echo ""
+
+    local default_owner="${SUDO_USER:-$(whoami)}"
+    read -r -p "Drive owner [$default_owner]: " drive_owner
+    drive_owner="${drive_owner:-$default_owner}"
+    echo ""
+
+    _prepare_drive "$device" "$label" "$mount_point" "$drive_owner"
+
+    # Update mergerfs fstab line
+    local mergerfs_line old_sources
     mergerfs_line=$(grep -v '^#' "$FSTAB" | grep 'mergerfs' || true)
     if [[ -z "$mergerfs_line" ]]; then
         echo -e "${RED}No mergerfs line found in $FSTAB.${NC}"; exit 1
     fi
     old_sources=$(echo "$mergerfs_line" | awk '{print $1}')
-    new_mergerfs_line="${mergerfs_line/$old_sources/${old_sources}:${mount_point}}"
-
-    echo -e "${YELLOW}Adding to fstab:${NC} $drive_line"
-    echo "$drive_line" | sudo tee -a "$FSTAB"
-    echo -e "${YELLOW}Updating mergerfs line:${NC} $new_mergerfs_line"
+    echo -e "${YELLOW}Updating mergerfs line in fstab${NC}"
     sudo sed -i "s|${old_sources}|${old_sources}:${mount_point}|" "$FSTAB"
 
-    # 7. Mount and live-add to pool
+    # Mount and live-add to pool
     echo -e "${YELLOW}Running:${NC} sudo systemctl daemon-reload"
     sudo systemctl daemon-reload
     echo -e "${YELLOW}Running:${NC} sudo mount $mount_point"
@@ -86,11 +98,106 @@ cmd_add() {
     echo -e "${YELLOW}Running:${NC} sudo setfattr -n user.mergerfs.branches -v '+>$mount_point' $ARRAY_MOUNT/.mergerfs"
     sudo setfattr -n user.mergerfs.branches -v "+>${mount_point}" "$ARRAY_MOUNT/.mergerfs"
 
-    # 8. Verify
+    # Verify
     echo ""
     df -h "$ARRAY_MOUNT" /mnt/drive*
     echo ""
     echo -e "${GREEN}${BOLD}Done.${NC} $device added to the pool as $mount_point."
+}
+
+# ── setup command ─────────────────────────────────────────────────────────────
+# NOTE: This command is untested. Review carefully before running on a real system.
+
+cmd_setup() {
+    # Install mergerfs
+    echo -e "${BOLD}Installing mergerfs...${NC}"
+    sudo apt install -y mergerfs
+    echo -e "${GREEN}mergerfs installed.${NC}"
+    echo ""
+
+    # Ask for array mount point
+    read -r -p "Array mount point [/array]: " array_mount
+    array_mount="${array_mount:-/array}"
+    ARRAY_MOUNT="$array_mount"
+
+    # Ask for shared options upfront
+    local default_owner="${SUDO_USER:-$(whoami)}"
+    read -r -p "Drive owner [$default_owner]: " drive_owner
+    drive_owner="${drive_owner:-$default_owner}"
+
+    read -r -p "Label prefix [Array_]: " label_prefix
+    label_prefix="${label_prefix:-Array_}"
+
+    read -r -p "Mount point prefix [/mnt/drive]: " mp_prefix
+    mp_prefix="${mp_prefix:-/mnt/drive}"
+    echo ""
+
+    # Show available drives
+    echo -e "${YELLOW}Available drives:${NC}"
+    lsblk -e 7 -o NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINT
+    echo ""
+
+    # Let user select drives one by one
+    local selected_devices=()
+    while true; do
+        read -r -p "Enter device to add (e.g. /dev/sdb1), or press Enter when done: " dev
+        [[ -z "$dev" ]] && break
+        if [[ ! -b "$dev" ]]; then
+            echo -e "${RED}$dev is not a block device, try again.${NC}"
+            continue
+        fi
+        selected_devices+=("$dev")
+        echo -e "${GREEN}Added $dev${NC}"
+    done
+
+    if [[ ${#selected_devices[@]} -eq 0 ]]; then
+        echo -e "${RED}No drives selected. Aborting.${NC}"; exit 1
+    fi
+
+    # Create array mount point owned by the user
+    echo ""
+    echo -e "${YELLOW}Creating array mount point:${NC} $ARRAY_MOUNT"
+    sudo install -d -o "$drive_owner" -g "$drive_owner" "$ARRAY_MOUNT"
+
+    # Process each selected drive
+    local mergerfs_sources=""
+    local mount_points=()
+    local idx=0
+    for device in "${selected_devices[@]}"; do
+        local label mount_point
+        label=$(printf "%s%02d" "$label_prefix" "$idx")
+        mount_point=$(printf "%s%02d" "$mp_prefix" "$idx")
+        mount_points+=("$mount_point")
+
+        echo ""
+        echo -e "${BOLD}── Drive $((idx + 1)) of ${#selected_devices[@]} ──────────────────────────────${NC}"
+        _prepare_drive "$device" "$label" "$mount_point" "$drive_owner"
+
+        mergerfs_sources="${mergerfs_sources:+${mergerfs_sources}:}${mount_point}"
+        idx=$((idx + 1))
+    done
+
+    # Write mergerfs fstab line
+    local mergerfs_line="$mergerfs_sources  $ARRAY_MOUNT  mergerfs  cache.files=off,category.create=pfrd,func.getattr=newest,dropcacheonclose=false,allow_other  0  0"
+    echo ""
+    echo -e "${YELLOW}Adding mergerfs line to fstab:${NC} $mergerfs_line"
+    echo "$mergerfs_line" | sudo tee -a "$FSTAB"
+
+    # Mount individual drives then the array
+    echo -e "${YELLOW}Running:${NC} sudo systemctl daemon-reload"
+    sudo systemctl daemon-reload
+    for mp in "${mount_points[@]}"; do
+        echo -e "${YELLOW}Running:${NC} sudo mount $mp"
+        sudo mount "$mp"
+    done
+    echo -e "${YELLOW}Running:${NC} sudo mount $ARRAY_MOUNT"
+    sudo mount "$ARRAY_MOUNT"
+
+    # Verify
+    echo ""
+    df -h "$ARRAY_MOUNT" "${mount_points[@]}"
+    echo ""
+    echo -e "${GREEN}${BOLD}Setup complete.${NC} Array mounted at $ARRAY_MOUNT with ${#selected_devices[@]} drive(s)."
 }
 
 # ── list command ──────────────────────────────────────────────────────────────
@@ -198,6 +305,7 @@ cmd_remove() {
 # ── dispatch ──────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
+    setup)  cmd_setup ;;
     add)    shift; cmd_add "$@" ;;
     remove) shift; cmd_remove "$@" ;;
     list)   cmd_list ;;
@@ -205,11 +313,13 @@ case "${1:-}" in
         echo "Usage: $(basename "$0") <command>"
         echo ""
         echo "Commands:"
+        echo "  setup                             Install mergerfs and configure a new array from scratch"
         echo "  list                              Show array members and available drives"
         echo "  add <device> <label> <mountpoint> Add a drive to the array"
         echo "  remove <mountpoint>               Remove a drive from the array"
         echo ""
         echo "Examples:"
+        echo "  $(basename "$0") setup"
         echo "  $(basename "$0") list"
         echo "  $(basename "$0") add /dev/sdc1 Array_02 /mnt/drive02"
         echo "  $(basename "$0") remove /mnt/drive02"
