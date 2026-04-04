@@ -57,8 +57,11 @@ cmd_add() {
     echo -e "UUID: ${BOLD}$uuid${NC}"
 
     # 4. Create mount point
-    echo -e "${YELLOW}Running:${NC} sudo mkdir $mount_point"
-    sudo mkdir "$mount_point"
+    local default_owner="${SUDO_USER:-$(whoami)}"
+    read -r -p "Drive owner [$default_owner]: " drive_owner
+    drive_owner="${drive_owner:-$default_owner}"
+    echo -e "${YELLOW}Running:${NC} sudo install -d -o $drive_owner -g $drive_owner $mount_point"
+    sudo install -d -o "$drive_owner" -g "$drive_owner" "$mount_point"
 
     # 5 & 6. Update fstab
     local drive_line="/dev/disk/by-uuid/$uuid  $mount_point  auto  nosuid,nodev,nofail,x-gvfs-show  0  0"

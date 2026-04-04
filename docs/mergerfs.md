@@ -99,8 +99,10 @@ sudo blkid /dev/sdX
 ### 4. Create a mount point
 
 ```bash
-sudo mkdir /mnt/drive02
+sudo install -d -o $USER -g $USER /mnt/drive02
 ```
+
+This creates the directory already owned by your user. If you use `sudo mkdir` instead, the mount point will be owned by root and writes to the pool will fail with permission denied.
 
 ### 5. Add the drive to `/etc/fstab`
 
