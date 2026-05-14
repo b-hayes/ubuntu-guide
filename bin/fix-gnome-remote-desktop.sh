@@ -17,6 +17,13 @@ echo -e "${BLUE}== Fix GNOME Remote Desktop ==${RESET}"
 echo -e "${CYAN}Installing nvidia-driver-570...${RESET}"
 sudo apt install -y nvidia-driver-570
 
+echo -e "${CYAN}Disabling system-level gnome-remote-desktop (Remote Login) service...${RESET}"
+# The system-level service intercepts port 3389 for Remote Login (new virtual sessions).
+# It conflicts with the user-level Desktop Sharing service. Masking prevents package
+# updates from re-enabling it.
+sudo systemctl disable --now gnome-remote-desktop.service 2>/dev/null || true
+sudo systemctl mask gnome-remote-desktop.service
+
 echo -e "${CYAN}Enabling GDM auto-login for $USER...${RESET}"
 sudo sed -i \
     -e 's|#\s*AutomaticLoginEnable\s*=.*|AutomaticLoginEnable=true|' \
